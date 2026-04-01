@@ -1,0 +1,287 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #ffffff;
+  color: #37352f;
+  -webkit-font-smoothing: antialiased;
+}
+
+.popup {
+  width: 360px;
+  padding: 20px;
+}
+
+/* --- Header --- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.logo {
+  font-size: 20px;
+}
+
+.header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #37352f;
+}
+
+/* --- Timer --- */
+
+.timer-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  padding: 12px 0;
+}
+
+.timer-value {
+  font-size: 36px;
+  font-weight: 700;
+  color: #37352f;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  transition: color 0.3s ease;
+}
+
+.timer-value.warning {
+  color: #f2994a;
+}
+
+.timer-value.danger {
+  color: #e03e3e;
+}
+
+.timer-separator {
+  font-size: 20px;
+  font-weight: 400;
+  color: #c3c2bf;
+}
+
+.timer-limit {
+  font-size: 20px;
+  font-weight: 500;
+  color: #a09f9c;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Blocked Banner --- */
+
+.blocked-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #fef0ef;
+  border: 1px solid #f5d5d3;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e03e3e;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.blocked-banner.visible {
+  display: flex;
+}
+
+.blocked-icon {
+  flex-shrink: 0;
+}
+
+/* --- Sections --- */
+
+.section {
+  margin-bottom: 16px;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.section-header h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #a09f9c;
+}
+
+.count {
+  font-size: 11px;
+  font-weight: 500;
+  color: #a09f9c;
+  background: #f0efed;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* --- Site List --- */
+
+.site-list {
+  margin-bottom: 8px;
+}
+
+.empty-state {
+  font-size: 13px;
+  color: #c3c2bf;
+  padding: 12px 0;
+}
+
+.site-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+}
+
+.site-item:hover {
+  background: #f7f6f3;
+}
+
+.site-name {
+  font-size: 14px;
+  color: #37352f;
+}
+
+.remove-btn {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #c3c2bf;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  opacity: 0;
+}
+
+.site-item:hover .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  color: #e03e3e;
+  background: #fef0ef;
+}
+
+/* --- Add Site --- */
+
+.add-site {
+  display: flex;
+  gap: 6px;
+}
+
+.add-site input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #e9e9e7;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #37352f;
+  background: #ffffff;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.add-site input::placeholder {
+  color: #c3c2bf;
+}
+
+.add-site input:focus {
+  border-color: #2eaadc;
+  box-shadow: 0 0 0 3px rgba(46, 170, 220, 0.12);
+}
+
+.add-site button {
+  padding: 8px 12px;
+  border: 1px solid #e9e9e7;
+  border-radius: 6px;
+  background: #f7f6f3;
+  color: #37352f;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.add-site button:hover {
+  background: #eeedea;
+  border-color: #ddddd9;
+}
+
+.add-site button:active {
+  background: #e6e5e2;
+}
+
+/* --- Time Limit Control --- */
+
+.limit-control {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.limit-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e9e9e7;
+  border-radius: 8px;
+  background: #f7f6f3;
+  color: #37352f;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+  line-height: 1;
+}
+
+.limit-btn:hover {
+  background: #eeedea;
+}
+
+.limit-btn:active {
+  background: #e6e5e2;
+}
+
+.limit-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #37352f;
+  min-width: 60px;
+  text-align: center;
+}
+
+/* --- Disabled State --- */
+
+.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}

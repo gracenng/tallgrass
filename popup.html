@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tallgrass</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup">
+    <!-- Header -->
+    <div class="header">
+      <span class="logo">🌿</span>
+      <h1>Tallgrass</h1>
+    </div>
+
+    <!-- Timer -->
+    <div class="timer-section">
+      <span class="timer-value" id="timerValue">0:00</span>
+      <span class="timer-separator">/</span>
+      <span class="timer-limit" id="timerLimit">30:00</span>
+    </div>
+
+    <!-- Blocked State Banner -->
+    <div class="blocked-banner" id="blockedBanner">
+      <span class="blocked-icon">⏸</span>
+      <span>Blocked until midnight. Nice work setting boundaries.</span>
+    </div>
+
+    <!-- Blacklist -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Blocked sites</h2>
+        <span class="count" id="siteCount">0</span>
+      </div>
+
+      <div class="site-list" id="siteList">
+        <div class="empty-state" id="emptyState">
+          No sites yet. Add one below.
+        </div>
+      </div>
+
+      <div class="add-site" id="addSiteRow">
+        <input
+          type="text"
+          id="domainInput"
+          placeholder="e.g. twitter.com"
+          spellcheck="false"
+          autocomplete="off"
+        >
+        <button id="addBtn" title="Add site">+</button>
+      </div>
+    </div>
+
+    <!-- Time Limit Setting -->
+    <div class="section" id="limitSection">
+      <div class="section-header">
+        <h2>Daily limit</h2>
+      </div>
+      <div class="limit-control">
+        <button class="limit-btn" id="limitDown" title="Decrease limit">−</button>
+        <span class="limit-value" id="limitValue">30 min</span>
+        <button class="limit-btn" id="limitUp" title="Increase limit">+</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
