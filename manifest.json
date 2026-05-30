@@ -1,16 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Tallgrass",
-  "version": "1.0.0",
-  "description": "A simple, privacy-respecting website blocker. Limit time on distracting sites with full transparency — no analytics, no tracking, no network calls.",
+  "version": "1.0.1",
+  "description": "A simple, privacy-respecting website blocker. Limit time on distracting sites.",
   "permissions": [
     "storage",
     "tabs",
     "alarms",
     "declarativeNetRequest"
-  ],
-  "host_permissions": [
-    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

@@ -10,15 +10,13 @@
   <div class="popup">
     <!-- Header -->
     <div class="header">
-      <span class="logo">🌿</span>
       <h1>Tallgrass</h1>
     </div>
 
-    <!-- Timer -->
+    <!-- Countdown Timer -->
     <div class="timer-section">
-      <span class="timer-value" id="timerValue">0:00</span>
-      <span class="timer-separator">/</span>
-      <span class="timer-limit" id="timerLimit">30:00</span>
+      <span class="timer-value" id="timerValue">30:00</span>
+      <span class="timer-label" id="timerLabel">remaining</span>
     </div>
 
     <!-- Blocked State Banner -->
@@ -52,17 +50,16 @@
       </div>
     </div>
 
-    <!-- Time Limit Setting -->
-    <div class="section" id="limitSection">
-      <div class="section-header">
-        <h2>Daily limit</h2>
-      </div>
+    <!-- Daily Limit -->
+    <div class="limit-row" id="limitSection">
+      <span class="limit-label">Daily limit</span>
       <div class="limit-control">
         <button class="limit-btn" id="limitDown" title="Decrease limit">−</button>
         <span class="limit-value" id="limitValue">30 min</span>
         <button class="limit-btn" id="limitUp" title="Increase limit">+</button>
       </div>
     </div>
+
   </div>
 
   <script src="popup.js"></script>

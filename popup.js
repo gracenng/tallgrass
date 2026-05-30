@@ -1,5 +1,5 @@
 // Tallgrass — Popup UI
-// Manages blacklist, displays time, adjusts limits.
+// Manages blacklist, displays countdown, adjusts limits.
 // All data lives in chrome.storage.local.
 
 const DEFAULTS = {
@@ -16,7 +16,7 @@ const LIMIT_MAX = 480;
 // --- DOM refs ---
 
 const timerValue = document.getElementById("timerValue");
-const timerLimit = document.getElementById("timerLimit");
+const timerLabel = document.getElementById("timerLabel");
 const blockedBanner = document.getElementById("blockedBanner");
 const siteList = document.getElementById("siteList");
 const siteCount = document.getElementById("siteCount");
@@ -32,7 +32,7 @@ const limitUp = document.getElementById("limitUp");
 // --- Formatting ---
 
 function formatTimer(ms) {
-  const totalSeconds = Math.floor(ms / 1000);
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -49,25 +49,28 @@ async function render() {
   try {
     data = await chrome.runtime.sendMessage({ type: "getStatus" });
   } catch {
-    // Fallback to storage if background isn't ready
     data = await chrome.storage.local.get(DEFAULTS);
   }
   const { blacklist, timeLimitMinutes, timeSpentMs, isBlocked } = data;
 
-  // Timer display — cap at limit so it never shows over
+  // Countdown: remaining = limit - spent
   const limitMs = timeLimitMinutes * 60_000;
-  const displayMs = Math.min(timeSpentMs, limitMs);
-  const percent = limitMs > 0 ? displayMs / limitMs : 0;
-  timerValue.textContent = formatTimer(displayMs);
-  timerLimit.textContent = formatTimer(limitMs);
+  const remainingMs = Math.max(0, limitMs - Math.min(timeSpentMs, limitMs));
+  const percent = limitMs > 0 ? 1 - remainingMs / limitMs : 1;
+
+  timerValue.textContent = formatTimer(remainingMs);
   timerValue.classList.remove("warning", "danger");
-  if (percent >= 1) {
+  if (remainingMs <= 0) {
     timerValue.classList.add("danger");
+    timerLabel.textContent = "time\u2019s up";
   } else if (percent >= 0.75) {
     timerValue.classList.add("warning");
+    timerLabel.textContent = "remaining";
+  } else {
+    timerLabel.textContent = "remaining";
   }
 
-  // Blocked state
+  // Blocked state — locks site list and limit control
   if (isBlocked) {
     blockedBanner.classList.add("visible");
     addSiteRow.classList.add("disabled");
@@ -77,8 +80,6 @@ async function render() {
     addSiteRow.classList.remove("disabled");
     limitSection.classList.remove("disabled");
   }
-
-  // Site list
   siteCount.textContent = blacklist.length;
   siteList.innerHTML = "";
 
@@ -97,7 +98,6 @@ async function render() {
       removeBtn.className = "remove-btn";
       removeBtn.textContent = "\u00d7";
       removeBtn.title = "Remove " + domain;
-
       if (isBlocked) {
         removeBtn.style.display = "none";
       } else {
@@ -118,17 +118,13 @@ async function render() {
 
 function cleanDomain(input) {
   let domain = input.trim().toLowerCase();
-  // Strip protocol if pasted
   domain = domain.replace(/^https?:\/\//, "");
-  // Strip path
   domain = domain.replace(/\/.*$/, "");
-  // Strip www.
   domain = domain.replace(/^www\./, "");
   return domain;
 }
 
 function isValidDomain(domain) {
-  // Basic validation: at least one dot, only valid chars
   return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(
     domain
   );
@@ -188,5 +184,5 @@ limitUp.addEventListener("click", () => changeLimit(LIMIT_STEP));
 // Initial render
 render();
 
-// Poll every second for live time updates while popup is open
+// Poll every second for live countdown while popup is open
 setInterval(render, 1000);

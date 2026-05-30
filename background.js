@@ -16,7 +16,11 @@ let tracking = null; // { tabId, domain, startTime }
 // --- Helpers ---
 
 function todayString() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function getDomain(url) {
@@ -91,12 +95,36 @@ async function checkAndResetIfNewDay() {
       isBlocked: false,
     });
     await removeBlockingRules();
+    // Reset tracking start time so elapsed time from yesterday isn't charged
+    // to today's budget on the next flushTracking() call.
+    if (tracking) tracking.startTime = Date.now();
     return true;
   }
   return false;
 }
 
 // --- Blocking Rules (declarativeNetRequest) ---
+
+// Redirect every open tab that is currently displaying a blocked domain.
+// Called when blocking first fires (covers tabs in other windows, background
+// tabs, and tabs the user was looking at but didn't trigger the active-tab
+// redirect).
+async function redirectAllBlockedTabs(blacklist) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.url) continue;
+      const hostname = getDomain(tab.url);
+      if (hostname && isDomainBlacklisted(hostname, blacklist)) {
+        chrome.tabs.update(tab.id, {
+          url: chrome.runtime.getURL("blocked.html"),
+        });
+      }
+    }
+  } catch {
+    // Tabs may have been closed
+  }
+}
 
 async function applyBlockingRules(blacklist) {
   // Remove any existing rules first
@@ -153,20 +181,9 @@ async function flushTracking() {
     await applyBlockingRules(data.blacklist);
     tracking = null;
 
-    // Redirect the current tab to the block page
-    try {
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
-      });
-      if (tab) {
-        chrome.tabs.update(tab.id, {
-          url: chrome.runtime.getURL("blocked.html"),
-        });
-      }
-    } catch {
-      // Tab may have been closed
-    }
+    // Redirect every open tab showing a blocked domain (covers multiple tabs,
+    // multiple windows, and background tabs).
+    await redirectAllBlockedTabs(data.blacklist);
   }
 }
 
@@ -218,16 +235,55 @@ async function startTrackingIfNeeded() {
 
 // --- Event Listeners ---
 
-chrome.tabs.onActivated.addListener(async () => {
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const data = await getData();
+  if (data.isBlocked) {
+    // Guard against switching to an already-loaded banned-site tab.
+    try {
+      const tab = await chrome.tabs.get(activeInfo.tabId);
+      const hostname = getDomain(tab.url);
+      if (hostname && isDomainBlacklisted(hostname, data.blacklist)) {
+        chrome.tabs.update(activeInfo.tabId, {
+          url: chrome.runtime.getURL("blocked.html"),
+        });
+      }
+    } catch {
+      // Tab may have been closed
+    }
+    await updateBadge();
+    return;
+  }
   await startTrackingIfNeeded();
   await updateBadge();
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url || changeInfo.status === "complete") {
+    const data = await getData();
+    if (data.isBlocked) {
+      // Guard against back/forward navigation and bfcache restores reaching a
+      // banned domain. declarativeNetRequest covers new navigations, but bfcache
+      // restores the page from memory without a network request, bypassing DNR.
+      const hostname = getDomain(tab.url);
+      if (hostname && isDomainBlacklisted(hostname, data.blacklist)) {
+        chrome.tabs.update(tabId, {
+          url: chrome.runtime.getURL("blocked.html"),
+        });
+      }
+      await updateBadge();
+      return;
+    }
     await startTrackingIfNeeded();
     await updateBadge();
   }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  if (tracking && tracking.tabId === tabId) {
+    await flushTracking();
+    tracking = null;
+  }
+  await updateBadge();
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -257,6 +313,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "getStatus") {
     (async () => {
+      await checkAndResetIfNewDay();
       const data = await getData();
       let liveTimeSpentMs = data.timeSpentMs;
       if (tracking) {
@@ -293,6 +350,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 chrome.storage.onChanged.addListener(async (changes) => {
   if (changes.blacklist) {
+    const data = await getData();
+    // Re-apply blocking rules if currently blocked so new list takes effect
+    if (data.isBlocked) {
+      await applyBlockingRules(data.blacklist);
+    }
+    await startTrackingIfNeeded();
+    await updateBadge();
+  }
+
+  if (changes.timeLimitMinutes) {
+    // Immediately flush and re-check so a limit decrease triggers blocking
+    // without waiting for the next tab event or heartbeat alarm.
+    await flushTracking();
     await startTrackingIfNeeded();
     await updateBadge();
   }
@@ -305,6 +375,7 @@ chrome.runtime.onStartup.addListener(async () => {
   if (data.isBlocked) {
     await applyBlockingRules(data.blacklist);
   }
+  await updateBadge();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -313,4 +384,5 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (data.isBlocked) {
     await applyBlockingRules(data.blacklist);
   }
+  await updateBadge();
 });
