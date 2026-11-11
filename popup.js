@@ -158,6 +158,7 @@ async function addSite() {
 
 async function removeSite(domain) {
   const data = await chrome.storage.local.get(DEFAULTS);
+  if (data.isBlocked) return;
   data.blacklist = data.blacklist.filter((d) => d !== domain);
   await chrome.storage.local.set({ blacklist: data.blacklist });
   render();
@@ -165,6 +166,8 @@ async function removeSite(domain) {
 
 async function changeLimit(delta) {
   const data = await chrome.storage.local.get(DEFAULTS);
+  // The locked controls can still be reached with the keyboard.
+  if (data.isBlocked) return;
   const newLimit = Math.max(LIMIT_MIN, Math.min(LIMIT_MAX, data.timeLimitMinutes + delta));
   await chrome.storage.local.set({ timeLimitMinutes: newLimit });
   render();

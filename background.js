@@ -10,8 +10,30 @@ const DEFAULTS = {
   isBlocked: false,
 };
 
-// In-memory tracking state (lost on service worker restart, recovered via alarm)
-let tracking = null; // { tabId, domain, startTime }
+const BLOCKED_PAGE = chrome.runtime.getURL("blocked.html");
+
+// Longest stretch a single flush may charge. The heartbeat flushes every
+// minute, so a bigger gap means the computer was asleep, not browsing.
+const MAX_FLUSH_MS = 2 * 60_000;
+
+// Tracking state: { tabId, domain, startTime } or null.
+// Mirrored in storage.session so it survives service worker restarts (Chrome
+// stops the worker after ~30s idle). storage.session is cleared when the
+// extension is disabled or the browser restarts.
+let tracking = null;
+const ready = chrome.storage.session.get("tracking").then((r) => {
+  tracking = r.tracking ?? null;
+});
+
+function setTracking(value) {
+  tracking = value;
+  return chrome.storage.session.set({ tracking: value });
+}
+
+function trackedElapsedMs() {
+  if (!tracking) return 0;
+  return Math.max(0, Math.min(Date.now() - tracking.startTime, MAX_FLUSH_MS));
+}
 
 // --- Helpers ---
 
@@ -38,8 +60,8 @@ function isDomainBlacklisted(hostname, blacklist) {
 }
 
 async function getData() {
-  const data = await chrome.storage.local.get(DEFAULTS);
-  return data;
+  await ready;
+  return chrome.storage.local.get(DEFAULTS);
 }
 
 function formatBadgeTime(ms) {
@@ -53,10 +75,6 @@ function formatBadgeTime(ms) {
 
 async function updateBadge() {
   const data = await getData();
-  let liveTimeMs = data.timeSpentMs;
-  if (tracking) {
-    liveTimeMs += Date.now() - tracking.startTime;
-  }
 
   if (data.isBlocked) {
     chrome.action.setBadgeText({ text: "!" });
@@ -66,6 +84,7 @@ async function updateBadge() {
   }
 
   if (tracking) {
+    const liveTimeMs = data.timeSpentMs + trackedElapsedMs();
     const percent = liveTimeMs / (data.timeLimitMinutes * 60_000);
     let color;
     if (percent >= 0.75) {
@@ -95,50 +114,55 @@ async function checkAndResetIfNewDay() {
       isBlocked: false,
     });
     await removeBlockingRules();
-    // Reset tracking start time so elapsed time from yesterday isn't charged
-    // to today's budget on the next flushTracking() call.
-    if (tracking) tracking.startTime = Date.now();
+    // Don't charge time from before midnight to today's budget.
+    if (tracking) await setTracking({ ...tracking, startTime: Date.now() });
     return true;
   }
   return false;
 }
 
-// --- Blocking Rules (declarativeNetRequest) ---
+// --- Blocking ---
 
-// Redirect every open tab that is currently displaying a blocked domain.
-// Called when blocking first fires (covers tabs in other windows, background
-// tabs, and tabs the user was looking at but didn't trigger the active-tab
-// redirect).
-async function redirectAllBlockedTabs(blacklist) {
-  try {
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (!tab.url) continue;
-      const hostname = getDomain(tab.url);
-      if (hostname && isDomainBlacklisted(hostname, blacklist)) {
-        chrome.tabs.update(tab.id, {
-          url: chrome.runtime.getURL("blocked.html"),
-        });
-      }
-    }
-  } catch {
-    // Tabs may have been closed
+function redirectIfBlacklisted(tabId, url, blacklist) {
+  const hostname = url && getDomain(url);
+  if (hostname && isDomainBlacklisted(hostname, blacklist)) {
+    chrome.tabs.update(tabId, { url: BLOCKED_PAGE }).catch(() => {});
   }
 }
 
+// Redirect every open tab showing a blocked domain: other windows, background
+// tabs, and tabs opened while the extension was disabled.
+async function redirectAllBlockedTabs(blacklist) {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    redirectIfBlacklisted(tab.id, tab.url || tab.pendingUrl, blacklist);
+  }
+}
+
+// Disabling the extension kills its pages, so block pages that were open turn
+// into error pages. Reload them once the extension is back.
+async function reloadBlockPages() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    const url = tab.url || tab.pendingUrl || "";
+    if (url.startsWith(BLOCKED_PAGE)) {
+      chrome.tabs.update(tab.id, { url: BLOCKED_PAGE }).catch(() => {});
+    }
+  }
+}
+
+// "block" rather than "redirect": redirect needs host permissions, which this
+// extension doesn't request. The request never reaches the site, and the tab
+// listeners below then swap Chrome's error page for blocked.html.
 async function applyBlockingRules(blacklist) {
-  // Remove any existing rules first
   await removeBlockingRules();
 
   const rules = blacklist.map((domain, i) => ({
     id: i + 1,
     priority: 1,
-    action: {
-      type: "redirect",
-      redirect: { extensionPath: "/blocked.html" },
-    },
+    action: { type: "block" },
     condition: {
-      urlFilter: "||" + domain,
+      urlFilter: "||" + domain + "^", // ^ so "x.com" doesn't match "x.company.com"
       resourceTypes: ["main_frame"],
     },
   }));
@@ -160,76 +184,62 @@ async function removeBlockingRules() {
 
 // --- Time Tracking ---
 
-async function flushTracking() {
-  if (!tracking) return;
+// Flushes run one at a time so overlapping events can't both read the old
+// timeSpentMs and drop each other's time.
+let flushQueue = Promise.resolve();
+function flushTracking() {
+  flushQueue = flushQueue.then(doFlush, doFlush);
+  return flushQueue;
+}
 
-  const now = Date.now();
-  const elapsed = now - tracking.startTime;
-  tracking.startTime = now;
+async function doFlush() {
+  await checkAndResetIfNewDay();
 
-  if (elapsed <= 0) return;
+  const elapsed = trackedElapsedMs();
+  if (tracking) await setTracking({ ...tracking, startTime: Date.now() });
 
   const data = await getData();
+  if (data.isBlocked) return;
+
   const newTimeSpent = data.timeSpentMs + elapsed;
+  if (elapsed > 0) {
+    await chrome.storage.local.set({ timeSpentMs: newTimeSpent });
+  }
 
-  await chrome.storage.local.set({ timeSpentMs: newTimeSpent });
-
-  // Check if limit reached
+  // Checked even when nothing is being tracked, so a lowered limit blocks
+  // right away.
   const limitMs = data.timeLimitMinutes * 60_000;
-  if (newTimeSpent >= limitMs && !data.isBlocked) {
+  if (newTimeSpent >= limitMs && data.blacklist.length > 0) {
     await chrome.storage.local.set({ isBlocked: true });
+    await setTracking(null);
     await applyBlockingRules(data.blacklist);
-    tracking = null;
-
-    // Redirect every open tab showing a blocked domain (covers multiple tabs,
-    // multiple windows, and background tabs).
     await redirectAllBlockedTabs(data.blacklist);
   }
 }
 
 async function startTrackingIfNeeded() {
-  await checkAndResetIfNewDay();
+  await flushTracking();
 
   const data = await getData();
-
-  // Don't track if already blocked
-  if (data.isBlocked) return;
-
-  // Don't track if no blacklist
-  if (data.blacklist.length === 0) return;
+  if (data.isBlocked || data.blacklist.length === 0) {
+    if (tracking) await setTracking(null);
+    return;
+  }
 
   let tab;
   try {
-    const [activeTab] = await chrome.tabs.query({
-      active: true,
-      lastFocusedWindow: true,
-    });
-    tab = activeTab;
+    [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   } catch {
     return;
   }
 
-  if (!tab?.url) {
-    await flushTracking();
-    tracking = null;
-    return;
-  }
-
-  const hostname = getDomain(tab.url);
-  if (!hostname) {
-    await flushTracking();
-    tracking = null;
-    return;
-  }
-
-  if (isDomainBlacklisted(hostname, data.blacklist)) {
+  const hostname = tab?.url ? getDomain(tab.url) : null;
+  if (hostname && isDomainBlacklisted(hostname, data.blacklist)) {
     if (!tracking || tracking.tabId !== tab.id) {
-      await flushTracking();
-      tracking = { tabId: tab.id, domain: hostname, startTime: Date.now() };
+      await setTracking({ tabId: tab.id, domain: hostname, startTime: Date.now() });
     }
-  } else {
-    await flushTracking();
-    tracking = null;
+  } else if (tracking) {
+    await setTracking(null);
   }
 }
 
@@ -241,12 +251,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     // Guard against switching to an already-loaded banned-site tab.
     try {
       const tab = await chrome.tabs.get(activeInfo.tabId);
-      const hostname = getDomain(tab.url);
-      if (hostname && isDomainBlacklisted(hostname, data.blacklist)) {
-        chrome.tabs.update(activeInfo.tabId, {
-          url: chrome.runtime.getURL("blocked.html"),
-        });
-      }
+      redirectIfBlacklisted(tab.id, tab.url, data.blacklist);
     } catch {
       // Tab may have been closed
     }
@@ -261,15 +266,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.url || changeInfo.status === "complete") {
     const data = await getData();
     if (data.isBlocked) {
-      // Guard against back/forward navigation and bfcache restores reaching a
-      // banned domain. declarativeNetRequest covers new navigations, but bfcache
-      // restores the page from memory without a network request, bypassing DNR.
-      const hostname = getDomain(tab.url);
-      if (hostname && isDomainBlacklisted(hostname, data.blacklist)) {
-        chrome.tabs.update(tabId, {
-          url: chrome.runtime.getURL("blocked.html"),
-        });
-      }
+      // Swaps the declarativeNetRequest error page for blocked.html, and
+      // catches back/forward cache restores, which make no network request.
+      redirectIfBlacklisted(tabId, tab.url, data.blacklist);
       await updateBadge();
       return;
     }
@@ -279,9 +278,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await ready;
   if (tracking && tracking.tabId === tabId) {
     await flushTracking();
-    tracking = null;
+    await setTracking(null);
   }
   await updateBadge();
 });
@@ -289,20 +289,21 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
     await flushTracking();
-    tracking = null;
+    await setTracking(null);
   } else {
     await startTrackingIfNeeded();
   }
   await updateBadge();
 });
 
-// Alarm heartbeat: flush time every minute (survives service worker restarts)
-chrome.alarms.create("heartbeat", { periodInMinutes: 1 });
+// Alarm heartbeat: flush time every minute. Only created if missing, since
+// re-creating it on every worker start would keep pushing the next tick back.
+chrome.alarms.get("heartbeat").then((alarm) => {
+  if (!alarm) chrome.alarms.create("heartbeat", { periodInMinutes: 1 });
+});
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "heartbeat") {
-    await checkAndResetIfNewDay();
-    await flushTracking();
     await startTrackingIfNeeded();
     await updateBadge();
   }
@@ -314,25 +315,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "getStatus") {
     (async () => {
       await checkAndResetIfNewDay();
-      const data = await getData();
-      let liveTimeSpentMs = data.timeSpentMs;
-      if (tracking) {
-        liveTimeSpentMs += Date.now() - tracking.startTime;
-      }
+      let data = await getData();
+      let liveTimeSpentMs = data.timeSpentMs + trackedElapsedMs();
 
-      // Check limit in real-time — trigger block immediately if exceeded
+      // Trigger the block immediately once the limit is hit.
       const limitMs = data.timeLimitMinutes * 60_000;
       if (!data.isBlocked && liveTimeSpentMs >= limitMs) {
         await flushTracking();
         await updateBadge();
-        const refreshed = await getData();
-        sendResponse({
-          timeSpentMs: limitMs,
-          timeLimitMinutes: refreshed.timeLimitMinutes,
-          blacklist: refreshed.blacklist,
-          isBlocked: refreshed.isBlocked,
-        });
-        return;
+        data = await getData();
+        liveTimeSpentMs = Math.max(data.timeSpentMs, limitMs);
       }
 
       sendResponse({
@@ -346,43 +338,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// --- React to blacklist changes ---
+// --- React to settings changes ---
 
-chrome.storage.onChanged.addListener(async (changes) => {
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+
   if (changes.blacklist) {
     const data = await getData();
     // Re-apply blocking rules if currently blocked so new list takes effect
     if (data.isBlocked) {
       await applyBlockingRules(data.blacklist);
+      await redirectAllBlockedTabs(data.blacklist);
     }
-    await startTrackingIfNeeded();
-    await updateBadge();
   }
 
-  if (changes.timeLimitMinutes) {
-    // Immediately flush and re-check so a limit decrease triggers blocking
-    // without waiting for the next tab event or heartbeat alarm.
-    await flushTracking();
+  if (changes.blacklist || changes.timeLimitMinutes) {
     await startTrackingIfNeeded();
     await updateBadge();
   }
 });
 
-// On startup / install — ensure clean state
-chrome.runtime.onStartup.addListener(async () => {
-  await checkAndResetIfNewDay();
-  const data = await getData();
-  if (data.isBlocked) {
-    await applyBlockingRules(data.blacklist);
-  }
-  await updateBadge();
-});
+// --- Startup ---
 
-chrome.runtime.onInstalled.addListener(async () => {
+// Runs every time the service worker starts. onStartup/onInstalled don't fire
+// when the extension is re-enabled in chrome://extensions, and tabs opened
+// while it was disabled fire no events, so state is restored here.
+async function init() {
+  await ready;
+  // storage.session is empty after a re-enable or browser restart.
+  const { active } = await chrome.storage.session.get("active");
+  await chrome.storage.session.set({ active: true });
+
   await checkAndResetIfNewDay();
   const data = await getData();
   if (data.isBlocked) {
-    await applyBlockingRules(data.blacklist);
+    if (!active) {
+      await applyBlockingRules(data.blacklist);
+      await reloadBlockPages();
+    }
+    await redirectAllBlockedTabs(data.blacklist);
+  } else {
+    await startTrackingIfNeeded();
   }
   await updateBadge();
-});
+}
+
+init();
